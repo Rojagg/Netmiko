@@ -1,6 +1,9 @@
 from netmiko import ConnectHandler
 import json
 import re
+import difflib
+from datetime import datetime
+from pathlib import Path
 
 def maskConversion(decimal):
     temp = 128
@@ -27,8 +30,11 @@ class Router:
         self.device = device
         self.router_id = Router.router_id
         Router.router_id += 1
-        self.path = f"interfaces_router_{self.router_id}.json"
-    
+        self.interfacePath = f"interfaces_router_{self.router_id}.json"
+        self.runningConfig = f"config_router_{self.router_id}.txt"
+        self.changesConfig = f"changes_router_{self.router_id}.txt"
+        self.saveConfiguration()
+
     def connectDevice(self):
         connect = ConnectHandler(**self.device)
         connect.enable()
@@ -40,6 +46,39 @@ class Router:
         connection.disconnect()
 
         return output
+
+    def saveConfiguration(self):
+        output = self.saveOutput("show run")
+        with open(self.runningConfig, "w") as f:
+            f.write(output)
+        
+    def checkChanges(self):
+        with open("TEMP.txt", "w") as f:
+            f.write(self.saveOutput('show run')[6:])
+
+
+        with open(self.runningConfig, 'r') as f1, open("TEMP.txt", "r") as f2:
+            
+            output = f1.readlines()[6:]
+            currentOutput = f2.readlines()[6:]
+
+        diff = list(difflib.unified_diff(
+            output,
+            currentOutput,
+            fromfile="old_file",
+            tofile="new_file",
+            lineterm=""
+        )) #because diff return generator
+        if diff:
+            with open(self.changesConfig, 'a') as f:
+                f.write("________________________________\n")
+                f.write(str(datetime.now()))
+                f.write("\n________________________________\n")
+                f.writelines(diff)
+                self.saveConfiguration()
+        Path("TEMP.txt").unlink()
+            
+
 
     def saveInterfaces(self):
         data = {}
@@ -64,14 +103,14 @@ class Router:
                 "status": parts[4]
             }
 
-        with open(self.path, "w") as f:
+        with open(self.interfacePath, "w") as f:
             json.dump(data, f, indent=4)
 
     def updateInterfaces(self):
         connection = self.connectDevice()
         connection.config_mode()
 
-        with open(self.path, "r") as f:
+        with open(self.interfacePath, "r") as f:
             interfaceParam = json.load(f)
         
         for key in interfaceParam:
@@ -85,7 +124,7 @@ class Router:
             if(interfaceParam[key]["method"] != "DHCP"):
                 connection.send_config_set([interfaceCommand, ipCommand, statusCommand])
         
-        connection.disconnect
+        connection.disconnect()
         
 
 
@@ -97,8 +136,11 @@ device = {
     "password": "cisco123!"
 }
 router1 = Router(device)
+router1.saveConfiguration()
 #router1.saveInterfaces()
 router1.updateInterfaces()
+
+router1.checkChanges()
 
 
 
